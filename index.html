@@ -136,14 +136,8 @@
         });
         log('Subscribed to push');
 
-        const saveRes = await fetch('/api/subscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(subscription)
-        });
-
-        if (!saveRes.ok) throw new Error('Failed to save subscription');
-        log('Subscription saved');
+        localStorage.setItem('pushSubscription', JSON.stringify(subscription));
+        log('Subscription saved locally');
 
         status('Notifications enabled!');
         pushBtn.disabled = false;
@@ -159,9 +153,15 @@
       pushBtn.disabled = true;
       status('Sending push…');
       try {
-        const res = await fetch('/api/push', { method: 'POST' });
+        const subscription = localStorage.getItem('pushSubscription');
+        if (!subscription) throw new Error('No subscription found — re-subscribe');
+        const res = await fetch('/api/push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: subscription
+        });
         const json = await res.json();
-        status(json.sent ? `Sent to ${json.sent} device(s)` : 'No subscribers found');
+        status(json.ok ? 'Push sent! Lock your phone.' : ('Error: ' + JSON.stringify(json)));
         log(JSON.stringify(json));
       } catch (err) {
         status('Send failed: ' + err.message);
