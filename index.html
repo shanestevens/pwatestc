@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Push Test</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="PushTest" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, sans-serif;
+      background: #f5f5f5;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      gap: 1rem;
+    }
+    h1 { font-size: 1.5rem; color: #1e1e1e; }
+    #status {
+      font-size: 0.9rem;
+      color: #555;
+      text-align: center;
+      min-height: 1.5em;
+    }
+    button {
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      background: #6366f1;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      width: 100%;
+      max-width: 280px;
+    }
+    button:disabled { background: #aaa; cursor: not-allowed; }
+    #log {
+      font-size: 0.75rem;
+      color: #888;
+      white-space: pre-wrap;
+      max-width: 340px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <h1>Push Test</h1>
+  <div id="status">Initialising…</div>
+  <button id="subscribeBtn" disabled>Enable Notifications</button>
+  <button id="pushBtn" disabled>Send Test Push</button>
+  <div id="log"></div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const subscribeBtn = document.getElementById('subscribeBtn');
+    const pushBtn = document.getElementById('pushBtn');
+    const logEl = document.getElementById('log');
+
+    function log(msg) {
+      logEl.textContent += msg + '\n';
+    }
+
+    function status(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = atob(base64);
+      return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+    }
+
+    async function init() {
+      if (!('serviceWorker' in navigator)) {
+        status('Service workers not supported');
+        return;
+      }
+      if (!('PushManager' in window)) {
+        status('Push not supported — open from Home Screen');
+        return;
+      }
+
+      try {
+        const reg = await navigator.serviceWorker.register('/sw.js');
+        log('SW registered');
+
+        await navigator.serviceWorker.ready;
+        log('SW ready');
+
+        const existing = await reg.pushManager.getSubscription();
+        if (existing) {
+          log('Already subscribed');
+          status('Notifications enabled');
+          pushBtn.disabled = false;
+        } else {
+          status('Tap "Enable Notifications" to subscribe');
+          subscribeBtn.disabled = false;
+        }
+
+        subscribeBtn.onclick = () => subscribe(reg);
+        pushBtn.onclick = sendPush;
+
+      } catch (err) {
+        status('Error: ' + err.message);
+        log(err.stack);
+      }
+    }
+
+    async function subscribe(reg) {
+      subscribeBtn.disabled = true;
+      status('Requesting permission…');
+
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        status('Permission denied');
+        subscribeBtn.disabled = false;
+        return;
+      }
+
+      try {
+        const keyRes = await fetch('/api/vapid-key');
+        const { publicKey } = await keyRes.json();
+        log('Got VAPID key');
+
+        const subscription = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey)
+        });
+        log('Subscribed to push');
+
+        const saveRes = await fetch('/api/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(subscription)
+        });
+
+        if (!saveRes.ok) throw new Error('Failed to save subscription');
+        log('Subscription saved');
+
+        status('Notifications enabled!');
+        pushBtn.disabled = false;
+
+      } catch (err) {
+        status('Subscribe failed: ' + err.message);
+        log(err.stack);
+        subscribeBtn.disabled = false;
+      }
+    }
+
+    async function sendPush() {
+      pushBtn.disabled = true;
+      status('Sending push…');
+      try {
+        const res = await fetch('/api/push', { method: 'POST' });
+        const json = await res.json();
+        status(json.sent ? `Sent to ${json.sent} device(s)` : 'No subscribers found');
+        log(JSON.stringify(json));
+      } catch (err) {
+        status('Send failed: ' + err.message);
+      } finally {
+        pushBtn.disabled = false;
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
